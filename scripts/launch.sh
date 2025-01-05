@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MIT License - Copyright (c) Hydra Dynamix 2025  (https://github.com/hydra-dynamix/synthia)
+# MIT License - Copyright (c) 2023 Bakobiibizo (https://github.com/bakobiibizo)
 
 set -e
 
@@ -578,6 +578,14 @@ deploy_miner() {
 # Function to serve a validator
 serve_validator() {
     echo "Serving Validator"
+    
+    # Check for required environment variables
+    if [ -z "$ANTHROPIC_api_key" ]; then
+        echo "Error: ANTHROPIC_api_key environment variable is not set"
+        echo "Please set it in your env/config.env file or export it directly"
+        return 1
+    fi
+    
     # Move to the root directory if we're in scripts
     if [[ "$PWD" == */scripts ]]; then
         cd ..
@@ -589,17 +597,33 @@ serve_validator() {
         source .venv/bin/activate
     fi
     
+    # Extract the namespace and class name
+    local namespace="${key_name%%.*}"
+    local classname="${key_name#*.}"
+    local module_path="synthia.validator.${namespace}.${classname}"
+    
+    # Clean up any existing PM2 processes with this name
+    echo "Cleaning up any existing validator processes..."
+    pm2 delete "$module_path" 2>/dev/null || true
+    
     # Start the validator with pm2, passing all required arguments
-    pm2 start --name "$module_path" \
+    echo "Starting validator..."
+    if pm2 start --name "$module_path" \
         --interpreter python3 \
         -f ./src/synthia/cli.py -- \
         --key_name "$key_name" \
         --host "$host" \
         --port "$port" \
-        validator "$filename"
+        validator "$filename"; then
         
-    echo "Validator served."
-    echo "Use 'pm2 logs' to view validator output"
+        echo "Validator started successfully."
+        echo "Use 'pm2 logs' to view validator output"
+        echo "Use 'pm2 stop $module_path' to stop the validator"
+        return 0
+    else
+        echo "Failed to start validator. Check the logs for more information."
+        return 1
+    fi
 }
 
 # Function to register a miner
@@ -677,12 +701,46 @@ register_miner() {
 # Function to register a validator
 register_validator() {
     echo "Registering Validator"
-    # Usage: comx module register [OPTIONS] NAME KEY NETUID
+    
+    # Extract the namespace part (before the dot) and create proper module path
+    local namespace="${key_name%%.*}"
+    local classname="${key_name#*.}"
+    local module_path="synthia.validator.${namespace}.${classname}"
+    
+    # First register the validator
+    echo "Registering validator with network..."
     comx module register --ip "$MODULE_REGISTRATION_IP" --port "$port" "$module_path" "$key_name" $netuid
+    
     if [ -n "$metadata" ]; then
         comx module update "$module_path" "$key_name" --metadata "$metadata"
     fi
-    echo "Validator registered."
+    
+    # Check current balance
+    echo "Checking current balance..."
+    local free_balance
+    free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | grep -oP '[\d.]+(?= COMAI)')
+    local max_stake
+    max_stake=$(echo "$free_balance - 1" | bc -l)
+    echo "Available balance: $free_balance COMAI (maximum stakeable amount: $max_stake COMAI)"
+    
+    # Ask if user wants to stake
+    read -p "Would you like to stake tokens? [y/N] " stake_response
+    if [[ "$stake_response" =~ ^[Yy]$ ]]; then
+        while true; do
+            read -p "Enter amount to stake (max $max_stake COMAI): " stake_amount
+            if [[ "$stake_amount" =~ ^[0-9]+\.?[0-9]*$ ]] && \
+               [ "$(echo "$stake_amount <= $max_stake" | bc -l)" -eq 1 ] && \
+               [ "$(echo "$stake_amount > 0" | bc -l)" -eq 1 ]; then
+                echo "Staking $stake_amount COMAI to validator..."
+                comx balance stake "$key_name" "$stake_amount" "$key_name"
+                break
+            else
+                echo "Invalid amount. Please enter a number between 0 and $max_stake"
+            fi
+        done
+    fi
+    
+    echo "Validator registered and staked."
 }
 
 # Function to update a module
