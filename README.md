@@ -97,31 +97,55 @@ pip install communex --upgrade
 
 ## Launcher Script
 
-The `launch.sh` script in the `scripts` directory provides an interactive way to configure and run your miner or validator.
+The `launch.sh` script in the `scripts` directory provides an interactive way to configure and run miners and validators. It offers various operations including registration, serving, and testing of miners.
 
 ### Using the Launcher
 
-Allow commands to be executed by the script:
+Run the launcher script from the project root:
 
 ```sh
-chmod +x scripts/launch.sh
+./scripts/launch.sh
 ```
 
-Run the launcher:
+The launcher provides a menu with the following main operations:
 
-```sh
-bash scripts/launch.sh
-```
+1. **Installation & Dependencies**
 
-Just follow the prompts after that.
+   - Install dependencies
+   - Update dependencies
 
-### What it does
+2. **Miner Operations**
 
-The launch script will prompt you step by step through the process of launching
-a validator or miner or both and execute the required commands without having
-to know details about the CLI.
+   - Register miner
+   - Serve miner
+   - Stop miner
+   - List miners
+   - Delete miner
+   - View miner logs
+   - Update miner
+   - Test miner
 
-Be aware that the launcher does execute commands that make changes on the block chain including balance transfers and module registration. Be sure you know what you'd like to do before using this tool as some actions cannot be undone. This tool is provided free of charge as is and with no warranty or guarantee. Use at your own risk.
+3. **Batch Operations**
+   - Register and serve multiple miners
+   - Update all miners
+   - Clean all miners
+   - Serve all miners
+   - Stop all miners
+   - Delete all miners
+
+### Testing Your Miner
+
+The launcher includes a testing feature (option 17) that allows you to verify your miner is working correctly:
+
+1. Select "Test Miner" from the menu
+2. Enter your miner's name when prompted
+3. The test will:
+   - Send a test request to your miner
+   - Verify the miner is responding correctly
+   - Check authentication is working
+   - Handle rate limits appropriately
+
+Note: Miners have rate limits based on their stake amount. If you receive a rate limit response, this actually indicates your miner is working correctly - it's enforcing the subnet's rate limiting rules as expected.
 
 ### Running A Miner
 

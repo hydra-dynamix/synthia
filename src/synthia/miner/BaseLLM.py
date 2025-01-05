@@ -1,10 +1,19 @@
 from abc import ABC, abstractmethod
 
 from communex.module.module import Module, endpoint  # type: ignore
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 
 
 class BaseLLM(ABC, Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.router = APIRouter(prefix="/method")
+        self.router.add_api_route("/generate", self.generate, methods=["POST"])
+        
+    def setup_routes(self, app: FastAPI):
+        """Setup routes for the FastAPI application."""
+        app.include_router(self.router)
+
     @abstractmethod
     def prompt(
             self, user_prompt: str, system_prompt: str | None = None
@@ -44,13 +53,8 @@ class BaseLLM(ABC, Module):
             message = self.prompt(prompt, self.get_context_prompt(self.max_tokens))
         except Exception as e:
             status_code = getattr(e, 'status_code', 500)
-            raise HTTPException(status_code=status_code, detail=str(e)) from e
-
-        match message:
-            case None, explanation:
-                raise HTTPException(status_code=500, detail=explanation)
-            case answer, _:
-                return {"answer": answer}
+            raise HTTPException(status_code=status_code, detail=str(e))
+        return {"response": message}
             
     @endpoint
     def get_model(self):

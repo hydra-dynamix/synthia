@@ -84,6 +84,7 @@ def serve(
         module, keypair, subnets_whitelist=[3], limiter=stake_limiter
     )
     miner_app = server.get_fastapi_app()
+    miner_app.include_router(module.router)  
     host = ip or "127.0.0.1"
     port_ = port or 8000
     uvicorn.run(miner_app, host=host, port=port_)

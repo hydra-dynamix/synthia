@@ -284,8 +284,8 @@ configure_launch() {
     # Enter the netuid of the module with validation
     while true; do
         # shellcheck disable=SC2162
-        read -p "Deploying to subnet (default 10): " netuid
-        [ -z "$netuid" ] && netuid=10
+        read -p "Deploying to subnet (default 3): " netuid
+        [ -z "$netuid" ] && netuid=3
         validate_number "$netuid" 0 100 && break
         echo "Please enter a valid subnet number (0-100)"
     done
@@ -574,10 +574,28 @@ transfer_and_stake_multiple() {
 # Function to serve a miner
 serve_miner() {
     local passed_module_path=$1
+    local test_mode=false
+    
+    # Parse arguments
+    while (( "$#" )); do
+        case "$1" in
+            --test-mode)
+                test_mode=true
+                shift
+                ;;
+            *)
+                if [ -z "$passed_module_path" ]; then
+                    passed_module_path=$1
+                fi
+                shift
+                ;;
+        esac
+    done
+
     echo "Serving Miner"
     
     # Move to the root directory if we're in scripts
-    if [[ "$PWD" == */scripts ]]; then
+    if [[ $PWD == */scripts ]]; then
         cd ..
     fi
     
@@ -637,6 +655,12 @@ serve_miner() {
     
     echo "Starting miner process..."
     
+    if [ "$test_mode" = true ]; then
+        echo "Running in test mode with higher rate limits"
+        export CONFIG_IP_LIMITER_BUCKET_SIZE=1000  # Allow more requests in the bucket
+        export CONFIG_IP_LIMITER_REFILL_RATE=100   # Refill faster
+    fi
+
     # Start the miner with pm2, always use 0.0.0.0 for serving
     # The module path should point to the specific class
     local module_path="synthia.miner.${namespace}.${classname}"
@@ -934,6 +958,114 @@ configure_port_range() {
     echo "Port range configured: $start_port-$end_port"
 }
 
+# Function to serve a test miner
+serve_test_miner() {
+    echo "Starting test miner with higher rate limits..."
+    
+    # Move to the root directory if we're in scripts
+    if [[ $PWD == */scripts ]]; then
+        cd ..
+    fi
+
+    # Prompt for miner name
+    echo "Enter the name of an existing miner (e.g., Rabbit.Miner_0)"
+    read -p "Miner name: " key_name
+
+    # Check if miner ports file exists
+    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
+    if [ ! -f "$MINER_PORTS_FILE" ]; then
+        echo " No miner ports file found at $MINER_PORTS_FILE"
+        return 1
+    fi
+    
+    # Look up the port from saved configuration
+    local port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    
+    if [ -z "$port" ]; then
+        echo " No port found for miner $key_name"
+        echo "Make sure the miner is registered and running"
+        return 1
+    fi
+
+    echo "Found port $port for miner $key_name"
+    
+    # First stop any existing instance
+    pm2 delete "$key_name" 2>/dev/null || true
+    
+    # Create a shell script to run the miner with environment variables
+    local run_script="/tmp/run_miner_$key_name.sh"
+    cat > "$run_script" << EOF
+#!/bin/bash
+source .venv/bin/activate
+
+# Set higher IP rate limits
+export CONFIG_IP_LIMITER_BUCKET_SIZE=1000
+export CONFIG_IP_LIMITER_REFILL_RATE=100
+
+# Set higher stake rate limits
+export CONFIG_STAKE_LIMITER_EPOCH=10
+export CONFIG_STAKE_LIMITER_CACHE_AGE=600
+export CONFIG_STAKE_LIMITER_TOKEN_RATIO=100
+
+exec python3 -m synthia.miner.cli "$key_name" --port "$port" --ip "0.0.0.0"
+EOF
+    chmod +x "$run_script"
+    
+    echo "Starting miner with rate limits:"
+    echo "  IP Limiter: bucket_size=1000, refill_rate=100"
+    echo "  Stake Limiter: epoch=10, token_ratio=100"
+    
+    # Start the miner using the shell script
+    pm2 start "$run_script" --name "$key_name" --update-env
+    
+    echo "Miner started in test mode. Press Enter to continue..."
+    read
+}
+
+# Function to test a miner
+test_miner() {
+    local miner_name=$1
+    
+    if [ -z "$miner_name" ]; then
+        read -p "Enter miner name (e.g., Rabbit.Miner_0): " miner_name
+    fi
+    
+    # Check if miner ports file exists
+    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
+    if [ ! -f "$MINER_PORTS_FILE" ]; then
+        echo " No miner ports file found at $MINER_PORTS_FILE"
+        return 1
+    fi
+    
+    # Look up the port from saved configuration
+    local port=$(grep "^$miner_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    
+    if [ -z "$port" ]; then
+        echo " No port found for miner $miner_name"
+        echo "Make sure the miner is registered first"
+        return 1
+    fi
+
+    echo "Testing miner $miner_name on port $port..."
+    
+    # Save current directory
+    local current_dir="$PWD"
+    
+    # Move to scripts directory if we're not already there
+    if [[ $PWD != */scripts ]]; then
+        cd scripts || return 1
+    fi
+    
+    # Run the test script
+    python3 test_miner.py "$port" "Test request to verify miner functionality" "$miner_name"
+    local test_result=$?
+    
+    # Return to original directory
+    cd "$current_dir" || return 1
+    
+    return $test_result
+}
+
 # Helper Functions
 validate_ip() {
     local ip=$1
@@ -966,34 +1098,6 @@ validate_number() {
     fi
 }
 
-show_help() {
-    cat << EOF
-Synthia Deployment Script
-Usage: ./launch.sh [OPTIONS]
-
-Options:
-    --setup     Run initial setup
-    --help      Show this help message
-
-Main Operations:
-    1. Deploy Validator    - Deploy and register a validator node
-    2. Deploy Miner       - Deploy and register a miner node
-    3. Deploy Both        - Deploy both validator and miner
-    4-7. Individual Operations:
-        - Register/Serve Validator
-        - Register/Serve Miner
-    8. Update Module      - Update existing module settings
-    9-14. Balance Operations:
-        - Transfer balance
-        - Unstake and transfer operations
-    15. Key Management    - Create new keys
-
-Examples:
-    ./launch.sh --setup   # Run initial setup
-    ./launch.sh          # Show main menu
-EOF
-}
-
 print_menu() {
     clear
     echo "=== Synthia Deployment Menu ==="
@@ -1008,24 +1112,52 @@ print_menu() {
     echo "  5. Register Miner"
     echo "  6. Serve Validator"
     echo "  7. Serve Miner"
-    echo "  8. Update Module - either validator or miner"
     echo ""
-    echo "Configuration:"
+    echo "Module Operations:"
+    echo "  8. Update Module"
     echo "  9. Configure Port Range"
     echo ""
     echo "Balance Operations:"
     echo "  10. Transfer Balance"
-    echo "  11. Unstake and Transfer Balance - 1 miner"
-    echo "  12. Unstake and Transfer Balance - specific miners"
-    echo "  13. Unstake and Transfer Balance - ALL miners"
-    echo "  14. Unstake and Transfer Balance - ALL miners by name"
-    echo "  15. Transfer and Stake - multiple miners"
+    echo "  11. Unstake and Transfer Balance"
+    echo "  12. Unstake and Transfer Balance - Multiple"
+    echo "  13. Unstake and Transfer Balance - All"
+    echo "  14. Unstake and Transfer Balance - By Name"
+    echo "  15. Transfer and Stake Multiple"
     echo ""
-    echo "Key Management:"
+    echo "Testing & Management:"
     echo "  16. Create Key"
+    echo "  17. Test Miner"
+    echo "  18. Exit"
     echo ""
-    echo "  0. Exit"
-    echo ""
+}
+
+show_help() {
+    cat << EOF
+Synthia Deployment Script
+Usage: ./launch.sh [OPTIONS] [COMMAND]
+
+Commands:
+  serve_miner [--test-mode]    Start a miner process. Use --test-mode for higher rate limits during testing
+  serve_validator              Start a validator process
+  create_key                   Create a new key
+  transfer_balance             Transfer balance between keys
+  register_miner               Register a miner
+  register_validator           Register a validator
+  update_module                Update a module
+  deploy_miner                Deploy a miner
+  deploy_validator            Deploy a validator
+  configure_port_range        Configure the port range for modules
+  test_miner                  Test a miner's functionality
+
+Options:
+  --help                      Show this help message
+  --setup                     Run initial setup
+
+Examples:
+  ./launch.sh serve_miner --test-mode    # Start a miner with higher rate limits for testing
+  ./launch.sh                            # Show interactive menu
+EOF
 }
 
 if [ "$1" = "--setup" ]; then
@@ -1039,115 +1171,34 @@ fi
 
 while true; do
     print_menu
-    # shellcheck disable=SC2162
-    read -p "Choose an action " choice
-    echo ""
-
-    case "$choice" in
-    1)
-        echo "Validator Configuration"
-        is_validator=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        deploy_validator
-        ;;
-    2)
-        echo "Miner Configuration"
-        is_miner=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        deploy_miner
-        ;;
-    3)
-        echo "Validator Configuration"
-        is_validator=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        deploy_validator
-        echo "Miner Configuration"
-        is_validator=false
-        is_miner=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        deploy_miner
-        ;;
-    4)
-        echo "Validator Configuration"
-        is_validator=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        register_validator
-        ;;
-    5)
-        echo "Miner Configuration"
-        is_miner=true
-        needs_stake=true
-        is_update=true
-        configure_launch
-        register_miner
-        ;;
-    6)
-        echo "Validator Configuration"
-        is_validator=true
-        configure_launch
-        serve_validator
-        ;;
-    7)
-        echo "Serving Miner"
-        if serve_miner; then
-            echo ""
-            read -p "Would you like to (q)uit or (c)ontinue to menu? [q/c]: " choice
-            case "$choice" in
-                q|Q) exit 0 ;;
-                *) echo "" ;;  # Continue to menu for any other input
-            esac
-        else
-            echo "Miner failed to start. Please check logs and try again."
-            read -p "Press enter to continue..."
-        fi
-        ;;
-    8)
-        echo "Module Configuration"
-        is_update=true
-        configure_launch
-        update_module
-        ;;
-    9)
-        configure_port_range
-        ;;
-    10)
-        transfer_balance
-        ;;
-    11)
-        unstake_and_transfer_balance
-        ;;
-    12)
-        unstake_and_transfer_balance_multiple
-        ;;
-    13)
-        unstake_and_transfer_balance_all
-        ;;
-    14)
-        unstake_and_transfer_balance_name
-        ;;
-    15)
-        transfer_and_stake_multiple
-        ;;
-    16)
-        create_key
-        ;;
-    0)
-        exit 0
-        ;;
-    *)
-        echo "Invalid choice"
-        ;;
+    read -p "Choose an option (1-18): " choice
+    
+    case $choice in
+        1) deploy_validator ;;
+        2) deploy_miner ;;
+        3)
+            deploy_validator
+            deploy_miner
+            ;;
+        4) register_validator ;;
+        5) register_miner ;;
+        6) serve_validator ;;
+        7) serve_miner ;;
+        8) update_module ;;
+        9) configure_port_range ;;
+        10) transfer_balance ;;
+        11) unstake_and_transfer_balance ;;
+        12) unstake_and_transfer_balance_multiple ;;
+        13) unstake_and_transfer_balance_all ;;
+        14) unstake_and_transfer_balance_name ;;
+        15) transfer_and_stake_multiple ;;
+        16) create_key ;;
+        17) if test_miner; then
+                echo -e "\nPress Enter to continue..."
+                read
+            fi
+            ;;
+        18) exit 0 ;;
+        *) echo "Invalid option" ;;
     esac
-
-    echo "Action complete."
 done

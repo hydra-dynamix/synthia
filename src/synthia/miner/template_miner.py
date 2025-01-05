@@ -34,6 +34,9 @@ class BaseMiner(BaseLLM):
             "eliminating redundant conversational additions. "
             f"Keep your answer below {int(self.settings.max_tokens * 0.75)} tokens"
         )
+        # Setup routes after initialization
+        if hasattr(self, 'app'):
+            self.setup_routes(self.app)
 
     def prompt(self, user_prompt: str, system_prompt: str | None | NotGiven = None):
         if not system_prompt:
@@ -73,7 +76,7 @@ class BaseMiner(BaseLLM):
     def model(self) -> str:
         return self.settings.model
 
-class Miner_0(Module):
+class Miner_0(BaseMiner):
     def __init__(self) -> None:
         super().__init__()
         # Cache of high-scoring phrases for each field
