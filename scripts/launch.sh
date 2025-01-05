@@ -45,6 +45,9 @@ cleanup() {
 # Store original directory
 ORIGINAL_DIR="$PWD"
 
+# Store miner ports file location
+MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
+
 # Check required commands
 check_requirements() {
     local missing_requirements=0
@@ -342,9 +345,7 @@ configure_launch() {
         echo "Set the metadata. This is an optional field."
         echo "It is a JSON object that is passed to the module in the format:"
         echo "{\"key\": \"value\"}."
-        # shellcheck disable=SC2162
-
-        read -p "Add metadata (y/n): " choose_metadata
+        echo "Add metadata (y/n): " choose_metadata
         if [ "$choose_metadata" = "y" ]; then
             # shellcheck disable=SC2162
             read -p "Enter metadata object: " metadata
@@ -617,8 +618,32 @@ serve_miner() {
         fi
     fi
 
+    # Extract namespace and class name
+    local namespace="${key_name%%.*}"
+    local classname="${key_name#*.}"
+
+    # Check if the miner module exists
+    local miner_path="src/synthia/miner/${namespace}.py"
+    if [ ! -f "$miner_path" ]; then
+        echo "Miner module $namespace not found. Creating it from template..."
+        # Create the miner module from template
+        cat > "$miner_path" << EOL
+from .template_miner import BaseMiner, miner_map
+
+class ${classname}(BaseMiner):
+    def __init__(self) -> None:
+        super().__init__()
+
+# Add the miner to the miner map
+miner_map["${classname}"] = ${classname}
+EOL
+        echo "Created new miner module at $miner_path"
+    fi
+
     # Look up the port from saved configuration
     local port=""
+    # Create the directory if it doesn't exist
+    mkdir -p "$(dirname "$MINER_PORTS_FILE")"
     if [ -f "$MINER_PORTS_FILE" ]; then
         port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
     fi
@@ -637,10 +662,6 @@ serve_miner() {
     else
         echo "Using saved port: $port"
     fi
-
-    # Extract namespace and class name
-    local namespace="${key_name%%.*}"
-    local classname="${key_name#*.}"
     
     echo "Debug info:"
     echo "key_name: $key_name"
@@ -1056,14 +1077,35 @@ test_miner() {
         cd scripts || return 1
     fi
     
-    # Run the test script
-    python3 test_miner.py "$port" "Test request to verify miner functionality" "$miner_name"
-    local test_result=$?
+    # Run the test script and capture its output
+    echo "Running test..."
+    echo "----------------------------------------"
+    if python3 test_miner.py "$port" "Test request to verify miner functionality" "$miner_name"; then
+        echo "----------------------------------------"
+        echo "Test completed successfully!"
+    else
+        echo "----------------------------------------"
+        echo "Test failed!"
+    fi
     
     # Return to original directory
     cd "$current_dir" || return 1
-    
-    return $test_result
+
+    # Ask user what to do next
+    while true; do
+        echo -e "\nWhat would you like to do?"
+        echo "1) Return to main menu"
+        echo "2) Run test again"
+        echo "3) Exit"
+        read -p "Choose an option (1-3): " choice
+        
+        case $choice in
+            1) return 0 ;;
+            2) test_miner "$miner_name" ;;
+            3) exit 0 ;;
+            *) echo "Invalid option" ;;
+        esac
+    done
 }
 
 # Helper Functions
@@ -1183,7 +1225,10 @@ while true; do
         4) register_validator ;;
         5) register_miner ;;
         6) serve_validator ;;
-        7) serve_miner ;;
+        7) if serve_miner; then
+                echo -e "\nPress Enter to continue..."
+                read
+           fi ;;
         8) update_module ;;
         9) configure_port_range ;;
         10) transfer_balance ;;
