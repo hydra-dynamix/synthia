@@ -190,12 +190,96 @@ configure_launch() {
         echo "Please enter a valid IP address"
     done
 
-    while true; do
-        # shellcheck disable=SC2162
-        read -p "Module port (default 10001): " port
-        [ -z "$port" ] && port=10001
-        validate_port "$port" && break
-    done
+    # Store miner ports in a file for persistence
+    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
+    # Store port range configuration
+    PORT_CONFIG_FILE="$HOME/.commune/port_config.txt"
+
+    # Get configured port range
+    read -r start_port end_port <<< "$(get_port_range)"
+    
+    # Check if port is already assigned to this miner
+    local saved_port=""
+    if [ -f "$MINER_PORTS_FILE" ]; then
+        saved_port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    fi
+
+    if [ -n "$saved_port" ]; then
+        # Verify saved port is still in valid range
+        if [ "$saved_port" -ge "$start_port" ] && [ "$saved_port" -le "$end_port" ]; then
+            echo "Found previously registered port for $key_name: $saved_port"
+            port=$saved_port
+        else
+            echo "Warning: Previously saved port $saved_port is outside configured range ($start_port-$end_port)"
+            saved_port=""
+        fi
+    fi
+
+    if [ -z "$saved_port" ]; then
+        while true; do
+            # Find the next available port in the configured range
+            local suggested_port=$start_port
+            if [ -f "$MINER_PORTS_FILE" ]; then
+                while [ "$suggested_port" -le "$end_port" ] && grep -q ":$suggested_port$" "$MINER_PORTS_FILE"; do
+                    suggested_port=$((suggested_port + 1))
+                done
+            fi
+            
+            if [ "$suggested_port" -gt "$end_port" ]; then
+                echo "No available ports in range $start_port-$end_port"
+                echo "Would you like to:"
+                echo "1. Configure a different port range"
+                echo "2. Enter a specific port"
+                echo "3. Exit"
+                read -p "Choose an option (1-3): " port_option
+                case "$port_option" in
+                    1)
+                        configure_port_range
+                        read -r start_port end_port <<< "$(get_port_range)"
+                        continue
+                        ;;
+                    2)
+                        suggested_port=""
+                        ;;
+                    *)
+                        echo "Exiting..."
+                        exit 1
+                        ;;
+                esac
+            fi
+            
+            if [ -n "$suggested_port" ]; then
+                echo "Suggested available port: $suggested_port (from range $start_port-$end_port)"
+            else
+                echo "Enter a port number between $start_port and $end_port"
+            fi
+            
+            # shellcheck disable=SC2162
+            read -p "Module port (press Enter to use suggested port): " port
+            [ -z "$port" ] && port=$suggested_port
+            
+            if ! validate_port "$port"; then
+                continue
+            fi
+            
+            # Verify port is in configured range
+            if [ "$port" -lt "$start_port" ] || [ "$port" -gt "$end_port" ]; then
+                echo "Port must be between $start_port and $end_port"
+                continue
+            fi
+            
+            # Check if port is already in use by another miner
+            if [ -f "$MINER_PORTS_FILE" ] && grep -q ":$port$" "$MINER_PORTS_FILE"; then
+                echo "Port $port is already assigned to another miner"
+                continue
+            fi
+            break
+        done
+        
+        # Save the port assignment
+        mkdir -p "$(dirname "$MINER_PORTS_FILE")"
+        echo "$key_name:$port" >> "$MINER_PORTS_FILE"
+    fi
 
     # Enter the netuid of the module with validation
     while true; do
@@ -206,15 +290,7 @@ configure_launch() {
         echo "Please enter a valid subnet number (0-100)"
     done
 
-    #    # Enter the name of the key that will be used to stake the validator
-    #    echo "The name of the key that will be used to stake the validator. Defaults to Module Path ($module_path) if not provided."
-    #    # shellcheck disable=SC2162
-    #    read -p "Module key name: " key_name
-    #    if [ "$key_name" = "" ]; then
     key_name=$key_name
-    #    fi
-    #    echo "Module key name: $key_name"
-    #    echo ""
 
     if [ ! -f "$HOME/.commune/key/$key_name.json" ]; then
         create_key
@@ -513,7 +589,6 @@ serve_miner() {
     
     # Use environment variables if they exist, otherwise use passed parameters or ask for input
     local key_name=${MODULE_KEYNAME:-$passed_module_path}
-    local port=${MODULE_PORT:-10001}  # Default to 10001 if not set
     
     if [ -z "$key_name" ]; then
         echo "Enter the miner name (e.g., Namespace.Miner_0)"
@@ -524,6 +599,27 @@ serve_miner() {
         fi
     fi
 
+    # Look up the port from saved configuration
+    local port=""
+    if [ -f "$MINER_PORTS_FILE" ]; then
+        port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    fi
+
+    if [ -z "$port" ]; then
+        echo "WARNING: No saved port found for miner $key_name"
+        echo "The port must match the one used during registration"
+        read -p "Enter the port used during registration: " port
+        if ! validate_port "$port"; then
+            echo "Invalid port number"
+            exit 1
+        fi
+        # Save the port for future use
+        mkdir -p "$(dirname "$MINER_PORTS_FILE")"
+        echo "$key_name:$port" >> "$MINER_PORTS_FILE"
+    else
+        echo "Using saved port: $port"
+    fi
+
     # Extract namespace and class name
     local namespace="${key_name%%.*}"
     local classname="${key_name#*.}"
@@ -532,6 +628,7 @@ serve_miner() {
     echo "key_name: $key_name"
     echo "namespace: $namespace"
     echo "classname: $classname"
+    echo "port: $port"
     
     # Clean up any existing pm2 process with this name
     echo "Cleaning up any existing process named '$key_name'..."
@@ -767,6 +864,76 @@ deploy_validator() {
     echo "Validator deployed."
 }
 
+# Function to get port range
+get_port_range() {
+    local start_port=10001
+    local end_port=10200
+
+    if [ -f "$HOME/.commune/port_config.txt" ]; then
+        local temp_start
+        local temp_end
+        temp_start=$(grep "^START_PORT=" "$HOME/.commune/port_config.txt" | cut -d'=' -f2)
+        temp_end=$(grep "^END_PORT=" "$HOME/.commune/port_config.txt" | cut -d'=' -f2)
+        if [ -n "$temp_start" ] && [ -n "$temp_end" ]; then
+            start_port=$temp_start
+            end_port=$temp_end
+        fi
+    fi
+
+    printf "%d %d" "$start_port" "$end_port"
+}
+
+# Function to set port range
+configure_port_range() {
+    echo "Configure port range for miners"
+    echo "These ports must be open and accessible from the network"
+    
+    local current_range
+    current_range=$(get_port_range)
+    local current_start
+    local current_end
+    read -r current_start current_end <<< "$current_range"
+    
+    while true; do
+        read -p "Enter start port (current: $current_start): " start_port
+        if [ -z "$start_port" ]; then
+            start_port=$current_start
+            break
+        fi
+        if validate_port "$start_port"; then
+            break
+        fi
+    done
+
+    while true; do
+        read -p "Enter end port (current: $current_end): " end_port
+        if [ -z "$end_port" ]; then
+            end_port=$current_end
+            break
+        fi
+        if validate_port "$end_port" && [ "$end_port" -gt "$start_port" ]; then
+            break
+        fi
+        echo "End port must be greater than start port ($start_port)"
+    done
+
+    # Create the .commune directory if it doesn't exist
+    if [ ! -d "$HOME/.commune" ]; then
+        mkdir -p "$HOME/.commune"
+    fi
+
+    # Write the configuration using a temporary file for atomicity
+    local temp_file
+    temp_file=$(mktemp)
+    {
+        echo "START_PORT=$start_port"
+        echo "END_PORT=$end_port"
+    } > "$temp_file"
+    mv "$temp_file" "$HOME/.commune/port_config.txt"
+    
+    echo "Port range configured: $start_port-$end_port"
+}
+
 # Helper Functions
 validate_ip() {
     local ip=$1
@@ -843,16 +1010,19 @@ print_menu() {
     echo "  7. Serve Miner"
     echo "  8. Update Module - either validator or miner"
     echo ""
+    echo "Configuration:"
+    echo "  9. Configure Port Range"
+    echo ""
     echo "Balance Operations:"
-    echo "  9.  Transfer Balance"
-    echo "  10. Unstake and Transfer Balance - 1 miner"
-    echo "  11. Unstake and Transfer Balance - specific miners"
-    echo "  12. Unstake and Transfer Balance - ALL miners"
-    echo "  13. Unstake and Transfer Balance - ALL miners by name"
-    echo "  14. Transfer and Stake - multiple miners"
+    echo "  10. Transfer Balance"
+    echo "  11. Unstake and Transfer Balance - 1 miner"
+    echo "  12. Unstake and Transfer Balance - specific miners"
+    echo "  13. Unstake and Transfer Balance - ALL miners"
+    echo "  14. Unstake and Transfer Balance - ALL miners by name"
+    echo "  15. Transfer and Stake - multiple miners"
     echo ""
     echo "Key Management:"
-    echo "  15. Create Key"
+    echo "  16. Create Key"
     echo ""
     echo "  0. Exit"
     echo ""
@@ -948,24 +1118,27 @@ while true; do
         update_module
         ;;
     9)
-        transfer_balance
+        configure_port_range
         ;;
     10)
-        unstake_and_transfer_balance
+        transfer_balance
         ;;
     11)
-        unstake_and_transfer_balance_multiple
+        unstake_and_transfer_balance
         ;;
     12)
-        unstake_and_transfer_balance_all
+        unstake_and_transfer_balance_multiple
         ;;
     13)
-        unstake_and_transfer_balance_name
+        unstake_and_transfer_balance_all
         ;;
     14)
-        transfer_and_stake_multiple
+        unstake_and_transfer_balance_name
         ;;
     15)
+        transfer_and_stake_multiple
+        ;;
+    16)
         create_key
         ;;
     0)
