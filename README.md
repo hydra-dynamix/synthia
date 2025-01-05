@@ -15,16 +15,15 @@ Welcome to the Synthia subnet, a bleeding-edge initiative to accelerate the open
         - [Operating with docker](#operating-with-docker)
       - [Manually, on Ubuntu 22.04](#manually-on-ubuntu-2204)
       - [With Nix](#with-nix)
-  - [Running A Miner](#running-a-miner)
-    - [Note](#note)
-  - [Running A Validator](#running-a-validator)
+  - [Launcher Script](#launcher-script)
+    - [Using the Launcher](#using-the-launcher)
+    - [Running A Miner](#running-a-miner)
+      - [Miner Configuration](#miner-configuration)
+      - [Port Configuration](#port-configuration)
+    - [Running A Validator](#running-a-validator)
   - [Hardware Requirements](#hardware-requirements)
     - [Minimum Requirements](#minimum-requirements)
     - [Recommended Requirements](#recommended-requirements)
-  - [Launcher Script](#launcher-script)
-    - [Using the launcher](#using-the-launcher)
-    - [What it does](#what-it-does)
-    - [Video tutorial](#video-tutorial)
 
 ## Overview
 
@@ -63,7 +62,7 @@ pip install communex --upgrade
 - Run `docker pull ghcr.io/agicommies/synthia:9d23f1f`
 - Run `docker run -v ~/.commune:/root/.commune -it [-p <port>:<port>] ghcr.io/agicommies/synthia:9d23f1f`
 - Run `poetry shell` to enter the enviroment
-  
+
 ##### Operating with docker
 
 - You can quit docker with ctrl+d
@@ -72,7 +71,7 @@ pip install communex --upgrade
 - You can list the ids of your containers with `docker ps`
 - Note that you should pass the ports you're going to use to the container (with `-p <port>:<port>`) to bind them to your host machine.
 - You can pass enviroments variables to docker with `-e <VARIABLE>=<value>`.
-    e.g `docker run -e ANTHROPIC_API_KEY=<your-anthropic-api-key> -v ~/.commune:/root/.commune -it ghcr.io/agicommies/synthia:9d23f1f`
+  e.g `docker run -e ANTHROPIC_API_KEY=<your-anthropic-api-key> -v ~/.commune:/root/.commune -it ghcr.io/agicommies/synthia:9d23f1f`
 
 #### Manually, on Ubuntu 22.04
 
@@ -96,86 +95,106 @@ pip install communex --upgrade
 
 [install.determinate.systems]: https://install.determinate.systems/
 
-## Running A Miner
+## Launcher Script
+
+The `launch.sh` script in the `scripts` directory provides an interactive way to configure and run your miner or validator.
+
+### Using the Launcher
+
+Allow commands to be executed by the script:
+
+```sh
+chmod +x scripts/launch.sh
+```
+
+Run the launcher:
+
+```sh
+bash scripts/launch.sh
+```
+
+Just follow the prompts after that.
+
+### What it does
+
+The launch script will prompt you step by step through the process of launching
+a validator or miner or both and execute the required commands without having
+to know details about the CLI.
+
+Be aware that the launcher does execute commands that make changes on the block chain including balance transfers and module registration. Be sure you know what you'd like to do before using this tool as some actions cannot be undone. This tool is provided free of charge as is and with no warranty or guarantee. Use at your own risk.
+
+### Running A Miner
 
 1. Get an API key from [Anthropic](https://console.anthropic.com/).
-
 2. Create a file named `config.env` in the `env/` folder with the following
    contents (you can also see the `env/config.env.sample` as an example):
 
    ```sh
    ANTHROPIC_API_KEY="<your-anthropic-api-key>"
-   OPENROUTER_API_KEY="<your-openrouter-api-key>"
-   ANTHROPIC_MODEL=claude-3-opus-20240229
-   ANTHROPIC_MAX_TOKENS=1000
-   ANTHROPIC_TEMPERATURE=0.5
    ```
 
-   Alternatively, you can set up those values as enviroment variables.
-   Note that you just need to provide the key to the provider that you're going
-   to use
+#### Miner Configuration
 
-3. Serve the miner:
+The `launch.sh` script in the `scripts` directory provides an interactive way to configure and run your miner. Here are the relevant options for mining:
 
-   Make sure to be located in the root of synthia repository
+1. **Namespace and Naming**:
 
-   ```sh  
-   cd synthia
-   ```
+   - When prompted for module name, use the format: `Namespace.Miner_X`
+   - Example: `Rabbit.Miner_0`, `Synthia.Miner_1`
+   - The namespace (e.g., `Rabbit`) is your unique identifier
+   - The number suffix (e.g., `_0`) distinguishes multiple miners under the same namespace
+   - Each namespace can have up to 20 miners (0 - 19)
 
-   Proceed with running the miner:
+2. **Launch Script Options**:
 
-   ```sh
-   python3 -m synthia.miner.cli <your_commune_key> --ip 0.0.0.0 [--port]
-   ```
+   - Option 2: `Deploy Miner` - Complete setup of a new miner (combines registration and serving)
+   - Option 5: `Register Miner` - Register a new miner on the network
+   - Option 7: `Serve Miner` - Start a registered miner
+   - Option 8: `Update Module` - Update an existing miner's configuration
+   - Option 9: `Configure Port Range` - Set the port range for multiple miners
+   - Option 15: `Create Key` - Create a new key for your miner
 
-    Alternatively, if you want to run a openrouter miner:
+3. **Registration Process (Option 5)**:
 
-   ```sh
-   python3 -m synthia.miner.cli <your_commune_key> --ip 0.0.0.0 [--port] --provider openrouter
-   ```
-  
-   The **ip** is passed as **0.0.0.0** to accept **outside connections**, since the default,
-   **127.0.0.1** accepts **only local** connections. Synthia has the **netuid 3**. Key is a name of your commune wallet/key.
-   If you don't have a wallet, generate one by running
+   - Enter your namespace and miner name
+   - Provide the IP address that other nodes will use to connect to your miner
+   - Select a port from your configured range
+   - Set stake amount (minimum 256 COM)
+   - Set delegation fee percentage
+   - The script will save your port assignment for future use
 
-   ```sh
-   comx key create <name>
-   ```
+4. **Serving Process (Option 7)**:
+   - Enter the same namespace and miner name used during registration
+   - The script will automatically:
+     - Use the saved port from registration
+     - Start the miner using PM2 for process management
+     - Configure the miner to accept external connections (0.0.0.0)
 
-   **Note**: you need to keep this process alive, running in the background. Some
-   options are [tmux](https://www.tmux.org/](https://ioflood.com/blog/install-tmux-command-linux/)), [pm2](https://pm2.io/docs/plus/quick-start/) or [nohup](https://en.wikipedia.org/wiki/Nohup).
+#### Port Configuration
 
-   Example using pm2
+When running multiple miners on one machine, each miner needs its own unique port. Configure this using Option 9 in the launch script:
 
-   ```sh
-   pm2 start "comx module serve synthia.miner.anthropic.AnthropicModule <key> --subnets-whitelist <synthia netuid> --ip 0.0.0.0" --name <name>
-   ```
+1. Use option 9 in the launcher menu to configure your port range
+2. Set your preferred port range (e.g., 50000-50200)
+3. The script will automatically:
+   - Suggest available ports from your configured range
+   - Save port assignments for each miner
+   - Ensure port consistency between registration and serving
 
-4. Finally register the module on the Synthia subnet:
+When using Docker, remember to expose your port range:
 
-    ```sh
-    comx module register <name> <your_commune_key> --ip <your-ip-address> --port <port> --netuid <synthia netuid>  
-    ```
+```bash
+docker run -v ~/.commune:/root/.commune -p 50000-50200:50000-50200 -it ghcr.io/agicommies/synthia:9d23f1f
+```
 
-### Note
+**Note**:
 
-- Make sure to **serve and register** the module using the **same key**.
-- If you are not sure about your `public ip` address:
+- Make sure to **serve and register** the module using the **same key**
+- Your namespace should be unique to avoid conflicts with other miners
+- Keep track of your miner names if running multiple instances
+- The port used for registration must match the port used for serving
 
-   ```sh
-   curl -4 https://ipinfo.io/ip
-   ```
-
-- Current `<synthia netuid>` is 3. If you want to check for yourself, you can run:
-
-   ```sh
-   comx subnet list
-   ```
-
-   And look for the name `synthia`
-
-## Running A Validator
+### Running A Validator
 
 1. Get an API key from [Anthropic](https://console.anthropic.com/).
 
@@ -191,8 +210,8 @@ pip install communex --upgrade
    ANTHROPIC_TEMPERATURE=0.5
    OPENAI_API_KEY="<your-openai-api-key>"
    ```
-  
-    Alternatively, you can set up those values as enviroment variables.
+
+   Alternatively, you can set up those values as enviroment variables.
 
 4. Register the validator
 
@@ -213,7 +232,7 @@ pip install communex --upgrade
    The default value of the `--call-timeout` parameter is 65 seconds.
    You can pass --provider openrouter to run using openrouter provider
 
-   Note: you need to keep this process alive, running in the background. Some options are [tmux](https://www.tmux.org/](https://ioflood.com/blog/install-tmux-command-linux/)), [pm2](https://pm2.io/docs/plus/quick-start/) or [nohup](https://en.wikipedia.org/wiki/Nohup).
+   Note: you need to keep this process alive, running in the background. Some options are [tmux](<https://www.tmux.org/](https://ioflood.com/blog/install-tmux-command-linux/)>), [pm2](https://pm2.io/docs/plus/quick-start/) or [nohup](https://en.wikipedia.org/wiki/Nohup).
 
 ## Hardware Requirements
 
@@ -234,31 +253,3 @@ If you want to run up to ~10+ miners / validators
 - **Storage:** 128 GB SSD
 - **GPU:** Not needed
 - **Network:** Gigabit Ethernet or better
-
-## Launcher Script
-
-[Eden](https://twitter.com/project_eden_ai) has provided a new bash script that will walk you through the process of launching a validator or miner for a simpler and streamlined process.
-
-### Using the launcher
-
-Allow commands to be executed by the script:
-`chmod +x scripts/launch.sh`
-
-Run the launcher:
-`bash scripts/launch.sh`
-
-Just follow the prompts after that.
-
-### What it does
-
-The launch script will prompt you step by step through the process of launching
-a validator or miner or both and execute the required commands without having
-to know details about the CLI.
-
-![launcher](assets/launch.png)
-
-Be aware that the launcher does execute commands that make changes on the block chain including balance transfers and module registration. Be sure you know what you'd like to do before using this tool as some actions cannot be undone. This tool is provided free of charge as is and with no warranty or guarantee. Use at your own risk.
-
-### Video tutorial
-
-[Video tutorial](https://www.youtube.com/watch?v=3CynHZdvbok)
