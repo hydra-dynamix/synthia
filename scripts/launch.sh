@@ -192,9 +192,6 @@ configure_launch() {
         fi
         echo "Please enter a valid IP address"
     done
-
-    # Store miner ports in a file for persistence
-    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
     # Store port range configuration
     PORT_CONFIG_FILE="$HOME/.commune/port_config.txt"
 
@@ -1140,6 +1137,92 @@ validate_number() {
     fi
 }
 
+show_help() {
+    cat << EOF
+Synthia Deployment Script
+Usage: ./launch.sh [OPTIONS] [COMMAND] [PARAMETERS]
+
+Commands:
+  serve_miner <name> [--test-mode]     Start a miner process
+    Parameters:
+      name                             Miner name in format Namespace.Miner_0
+      --test-mode                      Use higher rate limits for testing
+
+  serve_validator <name>               Start a validator process
+    Parameters:
+      name                             Validator name in format Namespace.Validator_0
+
+  create_key <name>                    Create a new key
+    Parameters:
+      name                             Name for the new key
+
+  transfer_balance                     Transfer balance between keys
+    Parameters:
+      source_key                       Source key name
+      target_key                       Target key name
+      amount                           Amount to transfer
+
+  register_miner <name>                Register a miner
+    Parameters:
+      name                             Miner name in format Namespace.Miner_0
+      --port <port>                    Optional: Specify port (default: auto-assigned)
+      --provider <provider>            Optional: Specify provider (anthropic/openrouter)
+
+  register_validator <name>            Register a validator
+    Parameters:
+      name                             Validator name in format Namespace.Validator_0
+      --port <port>                    Optional: Specify port (default: auto-assigned)
+
+  update_module <name>                 Update a module
+    Parameters:
+      name                             Module name to update
+
+  deploy_miner <name>                  Deploy a miner
+    Parameters:
+      name                             Miner name to deploy
+
+  deploy_validator <name>              Deploy a validator
+    Parameters:
+      name                             Validator name to deploy
+
+  configure_port_range                 Configure the port range for modules
+    Parameters:
+      start_port                       Starting port number
+      end_port                         Ending port number
+
+  test_miner <name>                    Test a miner's functionality
+    Parameters:
+      name                             Miner name to test
+      --prompt <prompt>                Optional: Test prompt
+
+Global Options:
+  --help                              Show this help message
+  --setup                             Run initial setup
+
+Environment Variables:
+  MODULE_KEYNAME                      Pre-set module name (optional)
+  CONFIG_IP_LIMITER_BUCKET_SIZE      Request bucket size for rate limiting
+  CONFIG_IP_LIMITER_REFILL_RATE      Rate limit refill rate
+
+Examples:
+  ./launch.sh serve_miner OpenAI.Miner_0 --test-mode    # Start a miner with test mode
+  ./launch.sh register_miner Anthropic.Miner_0 --port 8080 --provider anthropic
+  ./launch.sh serve_validator Text.Validator_0          # Start a validator
+  ./launch.sh                                          # Show interactive menu
+
+Port Management:
+  - Ports are stored in ~/.commune/miner_ports.txt
+  - Each module needs a consistent port across registrations and serving
+  - Default port range: 8000-9000
+
+Notes:
+  - Key names should be unique across your deployment
+  - Provider selection affects which API will be used
+  - Test mode increases rate limits for development
+  - Always ensure proper configuration in env/config.env
+EOF
+}
+
 print_menu() {
     clear
     echo "=== Synthia Deployment Menu ==="
@@ -1172,34 +1255,6 @@ print_menu() {
     echo "  17. Test Miner"
     echo "  18. Exit"
     echo ""
-}
-
-show_help() {
-    cat << EOF
-Synthia Deployment Script
-Usage: ./launch.sh [OPTIONS] [COMMAND]
-
-Commands:
-  serve_miner [--test-mode]    Start a miner process. Use --test-mode for higher rate limits during testing
-  serve_validator              Start a validator process
-  create_key                   Create a new key
-  transfer_balance             Transfer balance between keys
-  register_miner               Register a miner
-  register_validator           Register a validator
-  update_module                Update a module
-  deploy_miner                Deploy a miner
-  deploy_validator            Deploy a validator
-  configure_port_range        Configure the port range for modules
-  test_miner                  Test a miner's functionality
-
-Options:
-  --help                      Show this help message
-  --setup                     Run initial setup
-
-Examples:
-  ./launch.sh serve_miner --test-mode    # Start a miner with higher rate limits for testing
-  ./launch.sh                            # Show interactive menu
-EOF
 }
 
 if [ "$1" = "--setup" ]; then
