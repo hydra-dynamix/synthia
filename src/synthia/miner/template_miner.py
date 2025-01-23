@@ -78,7 +78,9 @@ class BaseMiner(BaseLLM):
 
 class Miner_0(BaseMiner):
     def __init__(self) -> None:
-        super().__init__()
+        self.settings = AnthropicSettings()  # type: ignore
+        self.client = Anthropic(api_key=self.settings.api_key)
+        super().__init__()  # This will set up the system prompt
         # Cache of high-scoring phrases for each field
         self.field_phrases: Dict[str, List[str]] = {}
         # Initialize explanation types

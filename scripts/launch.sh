@@ -1,25 +1,42 @@
 #!/bin/bash
 
-# MIT License - Copyright (c) 2023 Bakobiibizo (https://github.com/bakobiibizo)
-
+# Exit on error
 set -e
 
-burn_fee=2.5
-source_miner="src/synthia/miner/template_miner.py"
-source_validator="../synthia/validator/text_validator.py"
+# Export burn_fee so it's available to subprocesses
+export burn_fee=2.5
+
+# Get the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Always work from the script directory
+cd "$SCRIPT_DIR"
+
+# Get the project root directory
+PROJECT_ROOT="$(cd .. && pwd)"
+
+# Source paths relative to script location
+source_miner="$PROJECT_ROOT/src/synthia/miner/template_miner.py"
+source_validator="$PROJECT_ROOT/src/synthia/validator/text_validator.py"
 
 # Error handling
-trap 'error_handler $? $LINENO $BASH_LINENO "$BASH_COMMAND" $(printf "::%s" ${FUNCNAME[@]:-})' ERR
+trap 'error_handler $? $LINENO $BASH_LINENO "$BASH_COMMAND" "$(printf "::%s" "${FUNCNAME[@]:-}")"' ERR
 
 # Error handler function
 error_handler() {
-    local exit_code=$1
-    local line_no=$2
-    local bash_lineno=$3
-    local last_command=$4
-    local func_trace=$5
+    local exit_code="$1"
+    local line_no="$2"
+    local bash_lineno="$3"
+    local last_command="$4"
+    local func_trace="$5"
 
     echo "Error occurred in script at line: $line_no"
+    if [ -n "$bash_lineno" ]; then
+        echo "Function call trace (line numbers): $bash_lineno"
+    fi
+    if [ -n "$func_trace" ]; then
+        echo "Function call trace: $func_trace"
+    fi
     echo "Command: $last_command"
     echo "Exit code: $exit_code"
     
@@ -74,7 +91,7 @@ create_module_files() {
     
     echo "Creating $module_type module files..."
     
-    local source_file="src/synthia/$module_type/$filename.py"
+    local source_file="$PROJECT_ROOT/src/synthia/$module_type/$filename.py"
     if [ ! -f "$source_file" ]; then
         local template_file
         if [ "$module_type" = "miner" ]; then
@@ -84,7 +101,7 @@ create_module_files() {
         fi
         
         # Create directory if it doesn't exist
-        mkdir -p "src/synthia/$module_type"
+        mkdir -p "$PROJECT_ROOT/src/synthia/$module_type"
         
         # Copy template and replace class name
         cp "$template_file" "$source_file"
@@ -118,71 +135,197 @@ install_synthia() {
     python3 -m pip install --upgrade pip
     pip3 install setuptools wheel gnureadline
 
-    # Installing poetry and setting up shell
-    # shellcheck disable=SC2162
-    curl -sSL https://install.python-poetry.org | python3 -
-    echo "PATH=~/.local/share/pypoetry/venv/bin/poetry:$PATH" >>~/.bashrc
-    echo "PATH=~/.local/bin:$PATH" >>~/.bashrc
-    # shellcheck source=/dev/null
-    source ~/.bashrc
-    # shellcheck source=/dev/null
-    source .venv/bin/activate
-
     # Installing dependencies
-    poetry install
+    pip3 install -r requirements.txt
 
     # Installing synthia
-    poetry run pip3 install -e .
+    pip3 install -e .
 
     # Installing communex
-    poetry run pip3 install --upgrade communex
+    pip3 install --upgrade communex
     echo "Synthia installed."
 }
 
 # Sets up the environment for the miner or validator
-create_setup() {
-    echo "This will walk you through configuring your setup to launch miners and validators on CommuneAI."
-    echo "The instillation will only work on Linux. If you are on Windows, please refer to the Synthia readme for instructions."
-    echo "https://github.com/agicommies/synthia/blob/main/README.md"
-    # shellcheck disable=SC2162
-    read -p "Install Synthia (y/n): " install_synthia
-    if [ "$install_synthia" = "y" ]; then
-        install_synthia
+setup_environment() {
+    echo "Setting up environment..."
+    
+    # Ensure we have the required system packages for Python
+    if command -v apt-get &> /dev/null; then
+        echo "Installing required system packages..."
+        sudo apt-get update
+        sudo apt-get install -y python3-venv python3-full
+    else
+        echo "This script requires apt-get package manager (Ubuntu/Debian)"
+        exit 1
+    fi
+    
+    # Create project virtual environment if it doesn't exist
+    if [ ! -d "$PROJECT_ROOT/.venv" ]; then
+        echo "Creating virtual environment..."
+        python3 -m venv "$PROJECT_ROOT/.venv"
+    fi
+    
+    # Activate the virtual environment
+    echo "Activating virtual environment..."
+    VENV_ACTIVATE="$PROJECT_ROOT/.venv/bin/activate"
+    if [ ! -f "$VENV_ACTIVATE" ]; then
+        echo "Error: Virtual environment activation script not found at $VENV_ACTIVATE"
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    source "$VENV_ACTIVATE"
+    
+    # Install or upgrade pip in the virtual environment
+    python3 -m pip install --upgrade pip
+    
+    # Install Poetry for dependency management if not installed
+    if ! command -v poetry &> /dev/null; then
+        echo "Installing Poetry for dependency management..."
+        python3 -m pip install poetry
+    fi
+    
+    # Install project dependencies using Poetry
+    echo "Installing project dependencies..."
+    cd "$PROJECT_ROOT"
+    poetry config virtualenvs.create false  # Don't create Poetry venv, use our own
+    poetry install
+    
+    # Create commune directories if they don't exist
+    echo "Creating commune directories..."
+    mkdir -p "$HOME/.commune/key"
+    mkdir -p "$HOME/.commune/db"
+    
+    # Create env directory and config if it doesn't exist
+    mkdir -p "$PROJECT_ROOT/env"
+    if [ ! -f "$PROJECT_ROOT/env/config.env" ] && [ -f "$PROJECT_ROOT/env/config.env.sample" ]; then
+        cp "$PROJECT_ROOT/env/config.env.sample" "$PROJECT_ROOT/env/config.env"
+    fi
+    
+    echo "Installation complete! Your environment is ready for Synthia."
+    echo ""
+    echo "Important configuration needed:"
+    echo "1. Edit env/config.env and add your API keys:"
+    echo "   - OpenAI API key: https://platform.openai.com/api-keys"
+    echo "   - Anthropic API key: https://console.anthropic.com/settings/keys"
+    echo ""
+    echo "Starting Synthia environment..."
+    echo "To exit later, just type 'exit' or use Ctrl+D."
+    echo ""
+    
+    # Activate the virtual environment and start menu
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.venv/bin/activate"
+    cd "$PROJECT_ROOT"
+    
+    # Start the menu directly
+    if [ -z "$SYNTHIA_SHELL" ]; then
+        export SYNTHIA_SHELL=1
+        export PS1="(synthia) $PS1"
+        main_menu
+    fi
+}
+
+# Function to ensure we're in the virtual environment
+ensure_venv() {
+    # Skip if we're in setup mode or already in virtual environment
+    if [ "$1" = "--setup" ] || [ -n "$VIRTUAL_ENV" ]; then
+        return
     fi
 
-    echo "Setting up environment"
-    cp env/config.env.sample env/config.env
-    echo "An environment file has been created in env/config.env. For your miner and validators to function you need an OpenAI API key and Anthropic API key."
-    echo "OpenAI API key: https://platform.openai.com/api-keys"
-    echo "Anthropic API key: https://console.anthropic.com/settings/keys"
-    echo Setup complete.
+    if [ ! -d "$PROJECT_ROOT/.venv" ]; then
+        echo "Virtual environment not found. Running setup..."
+        "$0" --setup
+        return
+    fi
+
+    # If we're not in the virtual environment, activate it
+    if [ -z "$VIRTUAL_ENV" ]; then
+        echo "Activating virtual environment..."
+        VENV_ACTIVATE="$PROJECT_ROOT/.venv/bin/activate"
+        if [ ! -f "$VENV_ACTIVATE" ]; then
+            echo "Error: Virtual environment activation script not found at $VENV_ACTIVATE"
+            exit 1
+        fi
+        # shellcheck source=/dev/null
+        source "$VENV_ACTIVATE"
+        cd "$PROJECT_ROOT"
+        
+        # Set up shell environment
+        if [ -z "$SYNTHIA_SHELL" ]; then
+            export SYNTHIA_SHELL=1
+            export PS1="(synthia) $PS1"
+            main_menu
+            exit 0
+        fi
+    fi
 }
 
 # Function to configure the module launch
 configure_launch() {
+    # Initialize is_update flag
+    is_update="false"
+    
     # Enter the path of the module
     echo "The module name should be in the format of \"Namespace.Miner_X\" (eg. Rabbit.Miner_0)"
-    # shellcheck disable=SC2162
-    read -p "Module name: " key_name
+    while true; do
+        read -r -p "Module name: " key_name
 
-    # Check if the module path is valid
-    if [ "$key_name" = "" ]; then
-        echo "Error, must provide a valid module name."
-        # shellcheck disable=SC2162
-        read -p "Module name: " key_name
-    elif [ -z "$key_name" ]; then
-        echo "Error, must provide a valid module name."
+        # Check if the module path is valid
+        if [ -z "$key_name" ] || [[ ! "$key_name" =~ ^[A-Za-z0-9]+\.[A-Za-z0-9_]+$ ]]; then
+            echo "Error: Must provide a valid module name in the format Namespace.Miner_X"
+            continue
+        fi
+        break
+    done
+
+    # Check if the key exists by trying to read it
+    if [ ! -f "$HOME/.commune/key/$key_name.json" ]; then
+        echo "Key '$key_name' does not exist."
+        read -r -p "Would you like to create it? [y/N] " create_key_response
+        if [[ "$create_key_response" =~ ^[Yy]$ ]]; then
+            if ! create_key "$key_name"; then
+                echo "Failed to create key. Exiting..."
+                exit 1
+            fi
+            echo "Key created successfully."
+        else
+            echo "Cannot proceed without a valid key. Exiting..."
+            exit 1
+        fi
+    fi
+
+    # Check current balance before proceeding
+    local free_balance
+    if ! free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | tail -n 1 | grep -oP '^[\d.]+' || echo "0"); then
+        echo "Error: Failed to get wallet balance."
         exit 1
     fi
 
-    # Extract the namespace for module path
-    local namespace="${key_name%%.*}"
-    local module_path="synthia.miner.${namespace}"
+    if [ -z "$free_balance" ] || [ "$free_balance" = "0" ]; then
+        echo "Warning: No balance found or balance is 0 COMAI"
+        echo "You will need to transfer some COMAI to this wallet before registering."
+        read -r -p "Would you like to transfer balance now? [y/N] " transfer_now
+        if [[ "$transfer_now" =~ ^[Yy]$ ]]; then
+            transfer_balance
+            # Recheck balance after transfer
+            if ! free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | tail -n 1 | grep -oP '^[\d.]+' || echo "0"); then
+                echo "Error: Failed to get updated wallet balance."
+                exit 1
+            fi
+            if [ -z "$free_balance" ] || [ "$free_balance" = "0" ]; then
+                echo "Still no balance after transfer. Cannot proceed."
+                exit 1
+            fi
+        else
+            echo "Cannot proceed without balance. Exiting..."
+            exit 1
+        fi
+    fi
 
     # Enter the IP and port of the module
     while true; do
-        # shellcheck disable=SC2162
-        read -p "Module IP address for registration (the IP other nodes will use to connect to this miner): " registration_host
+        read -r -p "Module IP address for registration (the IP other nodes will use to connect to this miner): " registration_host
         if [ -z "$registration_host" ]; then
             echo "You must provide an IP address that other nodes can use to connect to this miner"
             continue
@@ -192,12 +335,6 @@ configure_launch() {
         fi
         echo "Please enter a valid IP address"
     done
-
-    # Store miner ports in a file for persistence
-    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
-    # Store port range configuration
-    PORT_CONFIG_FILE="$HOME/.commune/port_config.txt"
-
     # Get configured port range
     read -r start_port end_port <<< "$(get_port_range)"
     
@@ -234,7 +371,7 @@ configure_launch() {
                 echo "1. Configure a different port range"
                 echo "2. Enter a specific port"
                 echo "3. Exit"
-                read -p "Choose an option (1-3): " port_option
+                read -r -p "Choose an option (1-3): " port_option
                 case "$port_option" in
                     1)
                         configure_port_range
@@ -257,8 +394,7 @@ configure_launch() {
                 echo "Enter a port number between $start_port and $end_port"
             fi
             
-            # shellcheck disable=SC2162
-            read -p "Module port (press Enter to use suggested port): " port
+            read -r -p "Module port (press Enter to use suggested port): " port
             [ -z "$port" ] && port=$suggested_port
             
             if ! validate_port "$port"; then
@@ -286,26 +422,26 @@ configure_launch() {
 
     # Enter the netuid of the module with validation
     while true; do
-        # shellcheck disable=SC2162
-        read -p "Deploying to subnet (default 3): " netuid
+        read -r -p "Deploying to subnet (default 3): " netuid
         [ -z "$netuid" ] && netuid=3
         validate_number "$netuid" 0 100 && break
         echo "Please enter a valid subnet number (0-100)"
     done
 
-    key_name=$key_name
-
-    if [ ! -f "$HOME/.commune/key/$key_name.json" ]; then
-        create_key
+    # Determine if module needs staking based on module type
+    if [[ "$key_name" == *".Validator"* ]]; then
+        needs_stake="true"
+    elif [[ "$key_name" == *".Miner"* ]]; then
+        needs_stake="true"
+    else
+        needs_stake="false"
     fi
-    echo ""
 
     # Select if a balance needs to be transfered to the key
     echo "Transfer staking balance to the module key."
     echo "You can skip this step if you have enough balance on your key."
     echo "The sending key must be in the ~/.commune/key folder with enough com to transfer."
-    # shellcheck disable=SC2162
-    read -p "Transfer balance (y/n): " transfer_balance
+    read -r -p "Transfer balance (y/n): " transfer_balance
     if [ "$transfer_balance" = "y" ]; then
         transfer_balance
     fi
@@ -318,8 +454,7 @@ configure_launch() {
         echo "Miners require a balance of 256, not including fees, to mine."
         echo "There will be a burn fee that starts at 10 com and scales based on demand"
         echo "will be burned as a fee to stake. Make sure you have enough to cover the cost."
-        # shellcheck disable=SC2162
-        read -p "Set stake: " stake
+        read -r -p "Set stake: " stake
         echo "Setting stake: $stake"
         echo ""
     fi
@@ -327,8 +462,7 @@ configure_launch() {
     # Enter the delegation fee
     if [ "$is_update" = "true" ]; then
         echo "Set the delegation fee. This the percentage of the emission that are collected as a fee to delegate the staked votes to the module."
-        # shellcheck disable=SC2162
-        read -p "Delegation fee (default 20) int: " delegation_fee
+        read -r -p "Delegation fee (default 20) int: " delegation_fee
         echo ""
     fi
 
@@ -345,10 +479,9 @@ configure_launch() {
         echo "Set the metadata. This is an optional field."
         echo "It is a JSON object that is passed to the module in the format:"
         echo "{\"key\": \"value\"}."
-        echo "Add metadata (y/n): " choose_metadata
+        read -r -p "Add metadata (y/n): " choose_metadata
         if [ "$choose_metadata" = "y" ]; then
-            # shellcheck disable=SC2162
-            read -p "Enter metadata object: " metadata
+            read -r -p "Enter metadata object: " metadata
             echo "Module metadata: $metadata"
         fi
         echo ""
@@ -368,8 +501,7 @@ configure_launch() {
         echo "Delegation fee:     $delegation_fee"
         echo "Metadata:           $metadata"
     fi
-    # shellcheck disable=SC2162
-    read -p "Confirm settings (y/n): " confirm
+    read -r -p "Confirm settings (y/n): " confirm
     if [ "$confirm" = "y" ]; then
         echo "Deploying..."
         echo ""
@@ -399,8 +531,7 @@ create_key() {
     echo "Note that commune does not encrypt the key file so do not fund a key on an unsafe machine."
 
     if [ -z "$key_name" ]; then
-        # shellcheck disable=SC2162
-        read -p "Key name: " key_name
+        read -r -p "Key name: " key_name
     fi
     comx key create "$key_name"
     echo "This is your key. Save the mnemonic somewhere safe."
@@ -413,13 +544,10 @@ transfer_balance() {
     echo "Initiating Balance Transfer"
     echo "There is a 2.5 com fee on the balance of the transfer."
     echo "Example: 300 com transfered will arrive as 297.5 com"
-    # shellcheck disable=SC2162
-    read -p "From Key (sender): " key_from
-    # shellcheck disable=SC2162
-    read -p "Amount to Transfer: " amount
+    read -r -p "From Key (sender): " key_from
+    read -r -p "Amount to Transfer: " amount
     if [ -z "$key_name" ]; then
-        # shellcheck disable=SC2162
-        read -p "To Key (recipient): " key_to
+        read -r -p "To Key (recipient): " key_to
     else
         key_to="$key_name"
     fi
@@ -437,14 +565,10 @@ unstake_and_transfer_balance() {
 
     if [ -z "$key_from" ] || [ -z "$key_to" ] || [ -z "$key_to_transfer" ] || [ -z "$subnet" ] || [ -z "$amount" ]; then
         echo "Initiating Balance Unstake"
-        # shellcheck disable=SC2162
-        read -p "Unstake from: " key_from
-        # shellcheck disable=SC2162
-        read -p "Unstake to: " key_to
-        # shellcheck disable=SC2162
-        read -p "Transfer to: " key_to_transfer
-        # shellcheck disable=SC2162
-        read -p "Amount to unstake: " amount
+        read -r -p "Unstake from: " key_from
+        read -r -p "Unstake to: " key_to
+        read -r -p "Transfer to: " key_to_transfer
+        read -r -p "Amount to unstake: " amount
     fi
 
     amount_minus_half=$(echo "$amount - 0.5" | awk '{print $1 - 0.5}')
@@ -461,7 +585,10 @@ unstake_and_transfer_balance_all() {
   echo "Unstaking and transferring balance of all modules..."
 
   # Get the module names of all modules in the .commune/key directory
-  modulenames=$(find $HOME/.commune/key -type f -name "*_*" -exec basename {} \; | sed 's/\.[^.]*$//' | tr '\n' ' ')
+  modulenames=$(find "$HOME/.commune/key" -type f -name "*_*" -print0 | 
+    xargs -0 basename -a | 
+    sed 's/\.[^.]*$//' | 
+    tr '\n' ' ')
 
   # Store the module names in an array
   IFS=' ' read -r -a modulenames_array <<< "$modulenames"
@@ -476,7 +603,7 @@ unstake_and_transfer_balance_name() {
 
   echo "Enter module names ('.' to stop entering module names):"
   while true; do
-      read -p "Module name: " module_name
+      read -r -p "Module name: " module_name
       if [[ $module_name == "." ]]; then
           break
       fi
@@ -484,7 +611,7 @@ unstake_and_transfer_balance_name() {
   done
 
   # Get the module names of all modules in the .commune/key directory that match the provided module names
-  modulenames=$(find $HOME/.commune/key -type f -name "*_*" -print0 | 
+  modulenames=$(find "$HOME/.commune/key" -type f -name "*_*" -print0 | 
     xargs -0 basename -a | 
     sed 's/\.[^.]*$//' | 
     grep -E "$(IFS="|"; echo "${module_names[*]}")" | 
@@ -504,7 +631,7 @@ unstake_and_transfer_balance_multiple() {
     else
         echo "Enter module names ('.' to stop entering module names):"
         while true; do
-            read -p "Module name: " module_name
+            read -r -p "Module name: " module_name
             if [[ $module_name == "." ]]; then
                 break
             fi
@@ -513,15 +640,13 @@ unstake_and_transfer_balance_multiple() {
     fi
 
     # Ask the user for the amount
-    # shellcheck disable=SC2162
-    read -p "Amount to unstake from each miner: " amount
+    read -r -p "Amount to unstake from each miner: " amount
 
     # Ask the user for the key to transfer the balance to
-    # shellcheck disable=SC2162
-    read -p "Key to transfer balance to: " key_to_transfer
+    read -r -p "Key to transfer balance to: " key_to_transfer
 
     # Now the module_names array contains the names of the modules entered by the user
-    echo "Module names entered: ${module_names[@]}"
+    echo "Module names entered: ${module_names[*]@Q}"
 
     # Now the amounts array contains the amounts entered by the user
     echo "Amount to unstake and transfer: $amount"
@@ -541,12 +666,11 @@ transfer_and_stake_multiple() {
     declare -a module_names=()
 
     # Ask the user for the amount
-    # shellcheck disable=SC2162
-    read -p "Amount to stake to each miner: " amount
+    read -r -p "Amount to stake to each miner: " amount
 
     echo "Enter module names ('.' to stop entering module names):"
     while true; do
-        read -p "Module name: " module_name
+        read -r -p "Module name: " module_name
         if [[ $module_name == "." ]]; then
             break
         fi
@@ -555,8 +679,7 @@ transfer_and_stake_multiple() {
 
 
     # Ask the user for the key to transfer the balance to
-    # shellcheck disable=SC2162
-    read -p "Key to transfer balance from: " key_from
+    read -r -p "Key to transfer balance from: " key_from
 
 
     # transfer balance and stake to each miner
@@ -574,136 +697,86 @@ transfer_and_stake_multiple() {
 
 # Function to serve a miner
 serve_miner() {
-    local passed_module_path=$1
-    local test_mode=false
-    
-    # Parse arguments
-    while (( "$#" )); do
-        case "$1" in
-            --test-mode)
-                test_mode=true
-                shift
-                ;;
-            *)
-                if [ -z "$passed_module_path" ]; then
-                    passed_module_path=$1
-                fi
-                shift
-                ;;
-        esac
-    done
-
     echo "Serving Miner"
     
+    # Get module name input
+    echo "The module name should be in the format of \"Namespace.Miner_X\" (eg. Rabbit.Miner_0)"
+    while true; do
+        read -r -p "Module name: " key_name
+
+        # Check if the module path is valid
+        if [ -z "$key_name" ] || [[ ! "$key_name" =~ ^[A-Za-z0-9]+\.[A-Za-z0-9_]+$ ]]; then
+            echo "Error: Must provide a valid module name in the format Namespace.Miner_X"
+            continue
+        fi
+        break
+    done
+
+    # Extract the namespace and class name
+    local namespace="${key_name%%.*}"
+    local classname="${key_name#*.}"
+    local module_path="synthia.miner.${namespace}.${classname}"
+    
     # Move to the root directory if we're in scripts
-    if [[ $PWD == */scripts ]]; then
+    if [[ "$PWD" == */scripts ]]; then
         cd ..
     fi
     
     # Ensure we're in a virtual environment
     if [ -z "$VIRTUAL_ENV" ]; then
         echo "Activating virtual environment..."
-        source .venv/bin/activate
-    fi
-    
-    # Use environment variables if they exist, otherwise use passed parameters or ask for input
-    local key_name=${MODULE_KEYNAME:-$passed_module_path}
-    
-    if [ -z "$key_name" ]; then
-        echo "Enter the miner name (e.g., Namespace.Miner_0)"
-        read -p "Miner name: " key_name
-        if [ -z "$key_name" ]; then
-            echo "Error: Must provide a valid miner name in format Namespace.Miner_0"
+        VENV_ACTIVATE="$ORIGINAL_DIR/.venv/bin/activate"
+        if [ ! -f "$VENV_ACTIVATE" ]; then
+            echo "Error: Virtual environment activation script not found at $VENV_ACTIVATE"
             exit 1
         fi
+        # shellcheck source=/dev/null
+        source "$VENV_ACTIVATE"
     fi
-
-    # Extract namespace and class name
-    local namespace="${key_name%%.*}"
-    local classname="${key_name#*.}"
-
-    # Check if the miner module exists
-    local miner_path="src/synthia/miner/${namespace}.py"
-    if [ ! -f "$miner_path" ]; then
-        echo "Miner module $namespace not found. Creating it from template..."
-        # Create the miner module from template
-        cat > "$miner_path" << EOL
-from .template_miner import BaseMiner, miner_map
-
-class ${classname}(BaseMiner):
-    def __init__(self) -> None:
-        super().__init__()
-
-# Add the miner to the miner map
-miner_map["${classname}"] = ${classname}
-EOL
-        echo "Created new miner module at $miner_path"
+    
+    # Install the package in editable mode if not already installed
+    if ! pip show synthia &> /dev/null; then
+        echo "Installing Synthia package..."
+        pip install -e .
     fi
-
-    # Look up the port from saved configuration
-    local port=""
-    # Create the directory if it doesn't exist
-    mkdir -p "$(dirname "$MINER_PORTS_FILE")"
-    if [ -f "$MINER_PORTS_FILE" ]; then
-        port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    
+    # Clean up any existing PM2 processes with this name
+    if command -v pm2 &> /dev/null; then
+        pm2 delete "$key_name" &> /dev/null || true
     fi
-
+    
+    # Set minimal environment variables needed for serving
+    export MODULE_PATH="$module_path"
+    export MODULE_IP="0.0.0.0"  # Always use 0.0.0.0 for serving
+    export MODULE_KEYNAME="$key_name"
+    
+    # Get the port from miner_ports.txt
+    MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
+    if [ ! -f "$MINER_PORTS_FILE" ]; then
+        echo "Error: No miner ports file found at $MINER_PORTS_FILE"
+        echo "Please register the miner first using option 5"
+        return 1
+    fi
+    
+    local port
+    port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    
     if [ -z "$port" ]; then
-        echo "WARNING: No saved port found for miner $key_name"
-        echo "The port must match the one used during registration"
-        read -p "Enter the port used during registration: " port
-        if ! validate_port "$port"; then
-            echo "Invalid port number"
-            exit 1
-        fi
-        # Save the port for future use
-        mkdir -p "$(dirname "$MINER_PORTS_FILE")"
-        echo "$key_name:$port" >> "$MINER_PORTS_FILE"
-    else
-        echo "Using saved port: $port"
+        echo "Error: No port found for miner $key_name"
+        echo "Please register the miner first using option 5"
+        return 1
     fi
     
-    echo "Debug info:"
-    echo "key_name: $key_name"
-    echo "namespace: $namespace"
-    echo "classname: $classname"
-    echo "port: $port"
+    # Create the command to run the miner using ModuleServer with proper key loading
+    local run_cmd="from synthia.miner.${namespace} import ${classname}; from communex.module.server import ModuleServer; from communex.compat.key import classic_load_key; from communex.module._rate_limiters.limiters import StakeLimiterParams; import uvicorn; keypair = classic_load_key('${key_name}'); module = ${classname}(); stake_limiter = StakeLimiterParams(epoch=800, cache_age=600); server = ModuleServer(module, keypair, subnets_whitelist=[3], limiter=stake_limiter); app = server.get_fastapi_app(); app.include_router(module.router); uvicorn.run(app, host='0.0.0.0', port=${port})"
     
-    # Clean up any existing pm2 process with this name
-    echo "Cleaning up any existing process named '$key_name'..."
-    pm2 delete "$key_name" 2>/dev/null || true
-    sleep 1  # Give pm2 a moment to clean up
-    
-    echo "Starting miner process..."
-    
-    if [ "$test_mode" = true ]; then
-        echo "Running in test mode with higher rate limits"
-        export CONFIG_IP_LIMITER_BUCKET_SIZE=1000  # Allow more requests in the bucket
-        export CONFIG_IP_LIMITER_REFILL_RATE=100   # Refill faster
+    # Start the miner with PM2
+    echo "Starting miner with PM2..."
+    if ! pm2 start --name "$key_name" python3 -- -c "import sys; sys.path.append('.'); $run_cmd"; then
+        echo "Error: Failed to start miner with PM2"
+        return 1
     fi
-
-    # Start the miner with pm2, always use 0.0.0.0 for serving
-    # The module path should point to the specific class
-    local module_path="synthia.miner.${namespace}.${classname}"
     
-    echo "module_path: $module_path"
-    echo "key: $key_name"
-    
-    pm2 start --name "$key_name" \
-        --interpreter python3 \
-        $(which comx) -- \
-        module \
-        serve \
-        --ip "0.0.0.0" \
-        --port "$port" \
-        --subnets-whitelist 3 \
-        "$module_path" \
-        "$key_name"
-        
-    echo "Miner started. Checking status..."
-    sleep 2  # Give pm2 a moment to start the process
-    pm2 status
-    echo ""
     echo "Miner served. View logs with: pm2 logs $key_name"
     
     # Return status for the calling function
@@ -713,6 +786,7 @@ EOL
 # Function to deploy a miner
 deploy_miner() {
     echo "Deploying Miner"
+    configure_launch
     register_miner
     serve_miner "$key_name"
 }
@@ -736,7 +810,13 @@ serve_validator() {
     # Ensure we're in a virtual environment
     if [ -z "$VIRTUAL_ENV" ]; then
         echo "Activating virtual environment..."
-        source .venv/bin/activate
+        VENV_ACTIVATE="$ORIGINAL_DIR/.venv/bin/activate"
+        if [ ! -f "$VENV_ACTIVATE" ]; then
+            echo "Error: Virtual environment activation script not found at $VENV_ACTIVATE"
+            exit 1
+        fi
+        # shellcheck source=/dev/null
+        source "$VENV_ACTIVATE"
     fi
     
     # Extract the namespace and class name
@@ -775,32 +855,50 @@ register_miner() {
     # Extract the namespace part (before the dot) and create the miner file if it doesn't exist
     local namespace="${key_name%%.*}"
     local classname="${key_name#*.}"
-    local miner_file="/workspace/synthia/src/synthia/miner/${namespace}.py"
-    local init_file="/workspace/synthia/src/synthia/miner/__init__.py"
+    
+    # Validate namespace and classname
+    if [ -z "$namespace" ] || [ -z "$classname" ] || [ "$namespace" = "$key_name" ]; then
+        echo "Error: Invalid module name. Must be in format Namespace.Miner_X"
+        return 1
+    fi
+    
+    # Check if key is already registered on the network
+    if comx module info "$key_name" --netuid "$netuid" &>/dev/null; then
+        echo "Key '$key_name' is already registered on subnet $netuid"
+        echo "Proceeding with existing registration..."
+        return 0
+    fi
+
+    local miner_file="$PROJECT_ROOT/src/synthia/miner/${namespace}.py"
+    local init_file="$PROJECT_ROOT/src/synthia/miner/__init__.py"
     
     if [ ! -f "$miner_file" ]; then
         echo "Creating new miner file: $miner_file"
-        cp "/workspace/synthia/src/synthia/miner/template_miner.py" "$miner_file"
+        mkdir -p "$PROJECT_ROOT/src/synthia/miner"
+        cp "$source_miner" "$miner_file"
+        
+        # Replace the class name in the template
+        sed -i "s/Miner_1/$classname/g" "$miner_file"
         
         # Add import to __init__.py if not already there
-        if ! grep -q "from . import $namespace" "$init_file"; then
-            # Create or append to __init__.py
-            if [ ! -f "$init_file" ]; then
-                echo "from . import $namespace" > "$init_file"
+        if [ ! -f "$init_file" ]; then
+            echo "Creating __init__.py..."
+            echo "from . import $namespace" > "$init_file"
+            echo "" >> "$init_file"
+            echo "__all__ = ['$namespace']" >> "$init_file"
+        elif ! grep -q "from . import $namespace" "$init_file"; then
+            # Add the import at the top of the file
+            sed -i "1i from . import $namespace" "$init_file"
+            # Update __all__ list
+            if grep -q "__all__" "$init_file"; then
+                # Add to existing __all__ list if namespace not already there
+                if ! grep -q "'$namespace'" "$init_file"; then
+                    sed -i "s/__all__ = \[/__all__ = \['$namespace', /" "$init_file"
+                fi
+            else
+                # Create new __all__ list
                 echo "" >> "$init_file"
                 echo "__all__ = ['$namespace']" >> "$init_file"
-            else
-                # Add the import at the top of the file
-                sed -i "1i from . import $namespace" "$init_file"
-                # Update __all__ list
-                if grep -q "__all__" "$init_file"; then
-                    # Add to existing __all__ list
-                    sed -i "s/__all__ = \[/__all__ = \['$namespace', /" "$init_file"
-                else
-                    # Create new __all__ list
-                    echo "" >> "$init_file"
-                    echo "__all__ = ['$namespace']" >> "$init_file"
-                fi
             fi
         fi
     fi
@@ -810,26 +908,36 @@ register_miner() {
     
     # First register the miner
     echo "Registering miner with network..."
-    comx module register --ip "$MODULE_REGISTRATION_IP" --port "$port" "$module_path" "$key_name" $netuid
+    if [ -z "$MODULE_REGISTRATION_IP" ]; then
+        MODULE_REGISTRATION_IP="$registration_host"
+    fi
     
-    # Check current balance
-    echo "Checking current balance..."
+    # Register with key_name directly as the name, since that's what we want to use for identification
+    if ! comx module register --ip "$MODULE_REGISTRATION_IP" --port "$port" "$key_name" "$key_name" "$netuid"; then
+        echo "Error: Failed to register miner"
+        return 1
+    fi
+    
+    # Get current balance for staking
     local free_balance
-    free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | grep -oP '[\d.]+(?= COMAI)')
+    free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | tail -n 1 | grep -oP '^[\d.]+' || echo "0")
     local max_stake
     max_stake=$(echo "$free_balance - 1" | bc -l)
     echo "Available balance: $free_balance COMAI (maximum stakeable amount: $max_stake COMAI)"
     
     # Ask if user wants to stake
-    read -p "Would you like to stake tokens? [y/N] " stake_response
+    read -r -p "Would you like to stake tokens? [y/N] " stake_response
     if [[ "$stake_response" =~ ^[Yy]$ ]]; then
         while true; do
-            read -p "Enter amount to stake (max $max_stake COMAI): " stake_amount
+            read -r -p "Enter amount to stake (max $max_stake COMAI): " stake_amount
             if [[ "$stake_amount" =~ ^[0-9]+\.?[0-9]*$ ]] && \
                [ "$(echo "$stake_amount <= $max_stake" | bc -l)" -eq 1 ] && \
                [ "$(echo "$stake_amount > 0" | bc -l)" -eq 1 ]; then
                 echo "Staking $stake_amount COMAI to miner..."
-                comx balance stake "$key_name" "$stake_amount" "$key_name"
+                if ! comx balance stake "$key_name" "$stake_amount" "$key_name"; then
+                    echo "Error: Failed to stake tokens"
+                    return 1
+                fi
                 break
             else
                 echo "Invalid amount. Please enter a number between 0 and $max_stake"
@@ -837,7 +945,8 @@ register_miner() {
         done
     fi
     
-    echo "Miner registered and staked."
+    echo "Miner registered successfully."
+    return 0
 }
 
 # Function to register a validator
@@ -851,7 +960,7 @@ register_validator() {
     
     # First register the validator
     echo "Registering validator with network..."
-    comx module register --ip "$MODULE_REGISTRATION_IP" --port "$port" "$module_path" "$key_name" $netuid
+    comx module register --ip "$MODULE_REGISTRATION_IP" --port "$port" "$module_path" "$key_name" "$netuid"
     
     if [ -n "$metadata" ]; then
         comx module update "$module_path" "$key_name" --metadata "$metadata"
@@ -860,16 +969,16 @@ register_validator() {
     # Check current balance
     echo "Checking current balance..."
     local free_balance
-    free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | grep -oP '[\d.]+(?= COMAI)')
+    free_balance=$(comx balance free-balance "$key_name" 2>/dev/null | tail -n 1 | grep -oP '^[\d.]+' || echo "0")
     local max_stake
     max_stake=$(echo "$free_balance - 1" | bc -l)
     echo "Available balance: $free_balance COMAI (maximum stakeable amount: $max_stake COMAI)"
     
     # Ask if user wants to stake
-    read -p "Would you like to stake tokens? [y/N] " stake_response
+    read -r -p "Would you like to stake tokens? [y/N] " stake_response
     if [[ "$stake_response" =~ ^[Yy]$ ]]; then
         while true; do
-            read -p "Enter amount to stake (max $max_stake COMAI): " stake_amount
+            read -r -p "Enter amount to stake (max $max_stake COMAI): " stake_amount
             if [[ "$stake_amount" =~ ^[0-9]+\.?[0-9]*$ ]] && \
                [ "$(echo "$stake_amount <= $max_stake" | bc -l)" -eq 1 ] && \
                [ "$(echo "$stake_amount > 0" | bc -l)" -eq 1 ]; then
@@ -895,8 +1004,7 @@ update_module() {
     [ -n "$module_path" ] && options="$options --name $module_path"
     
     # Execute update command with built options
-    # shellcheck disable=SC2086
-    comx module update $options "$key_name" $netuid
+    comx module update "$options" "$key_name" "$netuid"
     echo "Module updated."
 }
 
@@ -940,7 +1048,7 @@ configure_port_range() {
     read -r current_start current_end <<< "$current_range"
     
     while true; do
-        read -p "Enter start port (current: $current_start): " start_port
+        read -r -p "Enter start port (current: $current_start): " start_port
         if [ -z "$start_port" ]; then
             start_port=$current_start
             break
@@ -951,7 +1059,7 @@ configure_port_range() {
     done
 
     while true; do
-        read -p "Enter end port (current: $current_end): " end_port
+        read -r -p "Enter end port (current: $current_end): " end_port
         if [ -z "$end_port" ]; then
             end_port=$current_end
             break
@@ -990,7 +1098,7 @@ serve_test_miner() {
 
     # Prompt for miner name
     echo "Enter the name of an existing miner (e.g., Rabbit.Miner_0)"
-    read -p "Miner name: " key_name
+    read -r -p "Miner name: " key_name
 
     # Check if miner ports file exists
     MINER_PORTS_FILE="$HOME/.commune/miner_ports.txt"
@@ -1000,7 +1108,8 @@ serve_test_miner() {
     fi
     
     # Look up the port from saved configuration
-    local port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    local port
+    port=$(grep "^$key_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
     
     if [ -z "$port" ]; then
         echo " No port found for miner $key_name"
@@ -1017,7 +1126,7 @@ serve_test_miner() {
     local run_script="/tmp/run_miner_$key_name.sh"
     cat > "$run_script" << EOF
 #!/bin/bash
-source .venv/bin/activate
+source "${ORIGINAL_DIR}/.venv/bin/activate"
 
 # Set higher IP rate limits
 export CONFIG_IP_LIMITER_BUCKET_SIZE=1000
@@ -1040,7 +1149,7 @@ EOF
     pm2 start "$run_script" --name "$key_name" --update-env
     
     echo "Miner started in test mode. Press Enter to continue..."
-    read
+    read -r
 }
 
 # Function to test a miner
@@ -1048,7 +1157,7 @@ test_miner() {
     local miner_name=$1
     
     if [ -z "$miner_name" ]; then
-        read -p "Enter miner name (e.g., Rabbit.Miner_0): " miner_name
+        read -r -p "Enter miner name (e.g., Rabbit.Miner_0): " miner_name
     fi
     
     # Check if miner ports file exists
@@ -1059,7 +1168,8 @@ test_miner() {
     fi
     
     # Look up the port from saved configuration
-    local port=$(grep "^$miner_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
+    local port
+    port=$(grep "^$miner_name:" "$MINER_PORTS_FILE" | cut -d':' -f2)
     
     if [ -z "$port" ]; then
         echo " No port found for miner $miner_name"
@@ -1097,7 +1207,7 @@ test_miner() {
         echo "1) Return to main menu"
         echo "2) Run test again"
         echo "3) Exit"
-        read -p "Choose an option (1-3): " choice
+        read -r -p "Choose an option (1-3): " choice
         
         case $choice in
             1) return 0 ;;
@@ -1105,6 +1215,9 @@ test_miner() {
             3) exit 0 ;;
             *) echo "Invalid option" ;;
         esac
+        
+        echo ""
+        read -r -p "Press Enter to continue..."
     done
 }
 
@@ -1140,6 +1253,92 @@ validate_number() {
     fi
 }
 
+show_help() {
+    cat << EOF
+Synthia Deployment Script
+Usage: ./launch.sh [OPTIONS] [COMMAND] [PARAMETERS]
+
+Commands:
+  serve_miner <name> [--test-mode]     Start a miner process
+    Parameters:
+      name                             Miner name in format Namespace.Miner_0
+      --test-mode                      Use higher rate limits for testing
+
+  serve_validator <name>               Start a validator process
+    Parameters:
+      name                             Validator name in format Namespace.Validator_0
+
+  create_key <name>                    Create a new key
+    Parameters:
+      name                             Name for the new key
+
+  transfer_balance                     Transfer balance between keys
+    Parameters:
+      source_key                       Source key name
+      target_key                       Target key name
+      amount                           Amount to transfer
+
+  register_miner <name>                Register a miner
+    Parameters:
+      name                             Miner name in format Namespace.Miner_0
+      --port <port>                    Optional: Specify port (default: auto-assigned)
+      --provider <provider>            Optional: Specify provider (anthropic/openrouter)
+
+  register_validator <name>            Register a validator
+    Parameters:
+      name                             Validator name in format Namespace.Validator_0
+      --port <port>                    Optional: Specify port (default: auto-assigned)
+
+  update_module <name>                 Update a module
+    Parameters:
+      name                             Module name to update
+
+  deploy_miner <name>                  Deploy a miner
+    Parameters:
+      name                             Miner name to deploy
+
+  deploy_validator <name>              Deploy a validator
+    Parameters:
+      name                             Validator name to deploy
+
+  configure_port_range                 Configure the port range for modules
+    Parameters:
+      start_port                       Starting port number
+      end_port                         Ending port number
+
+  test_miner <name>                    Test a miner's functionality
+    Parameters:
+      name                             Miner name to test
+      --prompt <prompt>                Optional: Test prompt
+
+Global Options:
+  --help                              Show this help message
+  --setup                             Run initial setup
+
+Environment Variables:
+  MODULE_KEYNAME                      Pre-set module name (optional)
+  CONFIG_IP_LIMITER_BUCKET_SIZE      Request bucket size for rate limiting
+  CONFIG_IP_LIMITER_REFILL_RATE      Rate limit refill rate
+
+Examples:
+  ./launch.sh serve_miner OpenAI.Miner_0 --test-mode    # Start a miner with test mode
+  ./launch.sh register_miner Anthropic.Miner_0 --port 8080 --provider anthropic
+  ./launch.sh serve_validator Text.Validator_0          # Start a validator
+  ./launch.sh                                          # Show interactive menu
+
+Port Management:
+  - Ports are stored in ~/.commune/miner_ports.txt
+  - Each module needs a consistent port across registrations and serving
+  - Default port range: 8000-9000
+
+Notes:
+  - Key names should be unique across your deployment
+  - Provider selection affects which API will be used
+  - Test mode increases rate limits for development
+  - Always ensure proper configuration in env/config.env
+EOF
+}
+
 print_menu() {
     clear
     echo "=== Synthia Deployment Menu ==="
@@ -1172,78 +1371,69 @@ print_menu() {
     echo "  17. Test Miner"
     echo "  18. Exit"
     echo ""
+    echo "To activate the Python environment again after exiting, run:"
+    echo "source .venv/bin/activate"
+    echo ""
 }
 
-show_help() {
-    cat << EOF
-Synthia Deployment Script
-Usage: ./launch.sh [OPTIONS] [COMMAND]
-
-Commands:
-  serve_miner [--test-mode]    Start a miner process. Use --test-mode for higher rate limits during testing
-  serve_validator              Start a validator process
-  create_key                   Create a new key
-  transfer_balance             Transfer balance between keys
-  register_miner               Register a miner
-  register_validator           Register a validator
-  update_module                Update a module
-  deploy_miner                Deploy a miner
-  deploy_validator            Deploy a validator
-  configure_port_range        Configure the port range for modules
-  test_miner                  Test a miner's functionality
-
-Options:
-  --help                      Show this help message
-  --setup                     Run initial setup
-
-Examples:
-  ./launch.sh serve_miner --test-mode    # Start a miner with higher rate limits for testing
-  ./launch.sh                            # Show interactive menu
-EOF
+main_menu() {
+    while true; do
+        print_menu
+        read -r -p "Choose an option (1-18): " choice
+        
+        case $choice in
+            1) deploy_validator ;;
+            2) deploy_miner ;;
+            3)
+                deploy_validator
+                deploy_miner
+                ;;
+            4) register_validator ;;
+            5) register_miner ;;
+            6) serve_validator ;;
+            7) serve_miner ;;
+            8) update_module ;;
+            9) configure_port_range ;;
+            10) transfer_balance ;;
+            11) unstake_and_transfer ;;
+            12) unstake_and_transfer_multiple ;;
+            13) unstake_and_transfer_all ;;
+            14) unstake_and_transfer_by_name ;;
+            15) transfer_and_stake_multiple ;;
+            16) create_key ;;
+            17) test_miner ;;
+            18) 
+                echo "Exiting menu..."
+                echo "To reactivate the Python environment, run: source .venv/bin/activate"
+                exit 0
+                ;;
+            *)
+                echo "Invalid option. Please try again."
+                ;;
+        esac
+        
+        echo ""
+        read -r -p "Press Enter to continue..."
+    done
 }
 
-if [ "$1" = "--setup" ]; then
-    create_setup
-fi
-
+# Main script execution
 if [ "$1" = "--help" ]; then
     show_help
     exit 0
 fi
 
-while true; do
-    print_menu
-    read -p "Choose an option (1-18): " choice
-    
-    case $choice in
-        1) deploy_validator ;;
-        2) deploy_miner ;;
-        3)
-            deploy_validator
-            deploy_miner
-            ;;
-        4) register_validator ;;
-        5) register_miner ;;
-        6) serve_validator ;;
-        7) if serve_miner; then
-                echo -e "\nPress Enter to continue..."
-                read
-           fi ;;
-        8) update_module ;;
-        9) configure_port_range ;;
-        10) transfer_balance ;;
-        11) unstake_and_transfer_balance ;;
-        12) unstake_and_transfer_balance_multiple ;;
-        13) unstake_and_transfer_balance_all ;;
-        14) unstake_and_transfer_balance_name ;;
-        15) transfer_and_stake_multiple ;;
-        16) create_key ;;
-        17) if test_miner; then
-                echo -e "\nPress Enter to continue..."
-                read
-            fi
-            ;;
-        18) exit 0 ;;
-        *) echo "Invalid option" ;;
-    esac
-done
+if [ "$1" = "--setup" ]; then
+    setup_environment
+    exit 0
+fi
+
+# Ensure we're in virtual environment and show menu
+ensure_venv "$1"
+main_menu
+
+# After menu exits, start an interactive shell to keep the environment active
+if [ -n "$VIRTUAL_ENV" ]; then
+    # Start a new interactive shell that inherits our environment
+    exec "$SHELL" -i
+fi

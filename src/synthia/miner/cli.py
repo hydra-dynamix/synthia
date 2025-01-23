@@ -44,7 +44,7 @@ def stake_to_ratio(stake: int, multiplier: int = 1) -> float:
 
 def provider_callback(value: str):
     value = value.lower()
-    allowed_providers = ["anthropic", "openrouter"]
+    allowed_providers = ["anthropic", "openrouter", "openai"]
     if value not in allowed_providers:
         raise typer.BadParameter(
             f"Invalid provider. Allowed providers are: {', '.join(allowed_providers)}"
