@@ -518,7 +518,7 @@ unstake_and_transfer_balance_multiple() {
     read -p "Key to transfer balance to: " key_to_transfer
 
     # Now the module_names array contains the names of the modules entered by the user
-    echo "Module names entered: ${module_names[@]}"
+    echo "Module names entered: ${module_names[*]@Q}"
 
     # Now the amounts array contains the amounts entered by the user
     echo "Amount to unstake and transfer: $amount"
