@@ -1,18 +1,10 @@
 from abc import ABC, abstractmethod
 
 from communex.module.module import Module, endpoint  # type: ignore
-from fastapi import HTTPException, APIRouter
+from fastapi import HTTPException
 
 
 class BaseLLM(ABC, Module):
-    def __init__(self) -> None:
-        super().__init__()
-        # Create router for all endpoints
-        self.router = APIRouter()
-        self.router.add_api_route("/", lambda: {"status": "ok"}, methods=["GET"])
-        self.router.add_api_route("/method/generate", self.generate, methods=["POST"])
-        self.router.add_api_route("/method/model", self.get_model, methods=["GET"])
-
     @abstractmethod
     def prompt(
             self, user_prompt: str, system_prompt: str | None = None
